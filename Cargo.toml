@@ -1,0 +1,24 @@
+[package]
+name = "corvus_plugin_map_entities"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.99"
+publish = false
+repository = "https://github.com/M-BSquared/corvus-map-entities"
+description = "The map-entities plugin of Corvus GCS"
+
+[dependencies]
+corvus_api = { path = "../../src/api" }
+eframe = { workspace = true }
+serde_json = { workspace = true }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Published as a shared library that Settings installs, not compiled into the program.
+[package.metadata.corvus]
+loadable = true
+name = "Map Entities"
+description = "Gates, trees, people and devices with a range, placed exactly on the Home map"
+icon = "map-pin"
+version = "1.0.0"
