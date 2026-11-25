@@ -97,7 +97,7 @@ impl Plugin for MapEntities {
             name: "Map Entities",
             icon: "map-pin",
             description: "Gates, trees, people and devices with a range, placed exactly on the Home map",
-            version: "1.1.0",
+            version: "2.0.0",
             order: 35,
             can_tab: true,
         }
@@ -196,7 +196,7 @@ impl Plugin for MapEntities {
         }
     }
 
-    fn show(&mut self, ui: &mut eframe::egui::Ui, area: eframe::egui::Rect, h: &mut Host) -> f32 {
+    fn show(&mut self, ui: &mut corvus_api::egui::Ui, area: corvus_api::egui::Rect, h: &mut Host) -> f32 {
         view::show(self, ui, area, h)
     }
 }
@@ -632,20 +632,20 @@ corvus_api::export_plugin!(plugin, LANG);
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_details_the_store_lists_are_the_plugins_own() {
-        let manifest = include_str!("../Cargo.toml").replace('\r', "");
-        let i = plugin().info();
+    fn the_manifest_says_what_the_plugin_says_of_itself() {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!("../plugin.json")).expect("plugin.json");
+        let i = MapEntities::default().info();
         for (key, want) in [
+            ("id", i.id),
             ("name", i.name),
             ("description", i.description),
             ("icon", i.icon),
             ("version", i.version),
         ] {
-            assert!(
-                manifest.contains(&format!("\n{key} = \"{want}\"\n")),
-                "[package.metadata.corvus] says something else than the plugin for {key}"
-            );
+            assert_eq!(manifest[key], want, "plugin.json says something else than the plugin for {key}");
         }
+        assert_eq!(manifest["order"], i.order);
+        assert_eq!(manifest["can_tab"], i.can_tab);
     }
 
     use super::*;
