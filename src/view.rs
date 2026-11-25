@@ -1,8 +1,8 @@
 //! The plugin's view (`.ent-*` of `map-entities.css`): the summary, the
 //! palette, the list and the editor of the selected entity.
 
-use corvus_api::ui::tip::HoverTr;
 use corvus_api::egui::{self, Color32, Pos2, Rect, Stroke, StrokeKind, Vec2};
+use corvus_api::ui::tip::HoverTr;
 
 use super::model::{
     bearing_deg, distance_m, format_degrees, kind_of, log_text, metres, parse_coordinate_pair, parse_degrees,
