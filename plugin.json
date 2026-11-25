@@ -6,6 +6,6 @@
   "version": "2.0.0",
   "order": 35,
   "can_tab": true,
-  "min_corvus": "2026.11.94",
+  "min_corvus": "2026.11.99",
   "permissions": ["ai.tools", "files"]
 }
