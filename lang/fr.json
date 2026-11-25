@@ -2,6 +2,8 @@
   "strings": {
     "Above, {up} up, {off} off centre": "Au-dessus, {up} de haut, {off} du centre",
     "Added {name} to Map Entities.": "{name} ajouté à Objets de carte.",
+    "AI clients may place things": "Les clients IA peuvent placer des éléments",
+    "AI clients may read what is placed": "Les clients IA peuvent lire ce qui est placé",
     "Aim on the map": "Orienter sur la carte",
     "Angle (degrees, 360 for a full circle)": "Angle (degrés, 360 pour un cercle complet)",
     "Antenna": "Antenne",
@@ -74,6 +76,8 @@
     "Show on the map": "Afficher sur la carte",
     "Target": "Cible",
     "The map is not ready yet": "La carte n'est pas encore prête",
+    "Through Corvus' MCP server an AI client can list what is placed, with what the aircraft did to it, and show it on the map. It also needs Plugin tools switched on in Settings, Connections, MCP.": "Par le serveur MCP de Corvus, un client IA peut lister ce qui est placé, avec ce que l'aéronef en a fait, et le montrer sur la carte. Il faut aussi activer Outils des plugins dans Paramètres, Connexions, MCP.",
+    "Through Corvus' MCP server an AI client can place things on the map, and change or remove the ones it added. What you placed stays yours, what it added is marked AI and is not shared with other plugins. Nothing of it reaches the aircraft.": "Par le serveur MCP de Corvus, un client IA peut placer des éléments sur la carte et modifier ou retirer les siens. Ce que vous avez placé reste à vous, ce qu'il a ajouté porte la marque AI et n'est pas partagé avec d'autres plugins. Rien n'atteint l'aéronef.",
     "Through, {up} up, {off} off centre": "Traversée, {up} de haut, {off} du centre",
     "Tree": "Arbre",
     "Trees hit": "Arbres touchés",

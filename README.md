@@ -16,6 +16,7 @@ A Rust crate (`corvus_plugin_map_entities`) built on `corvus_api`, the plugin AP
 published as a shared library from this repository.
 
 - `src/model.rs`: the rules, held to what the web plugin answered.
+- `src/mcp.rs`: the tools for an AI client, off until the gear allows them.
 - `src/lib.rs`: the plugin and the map.
 - `src/view.rs`: what is drawn.
 - `lang/`: German, French and the dialect file.

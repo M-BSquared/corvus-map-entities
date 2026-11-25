@@ -470,7 +470,17 @@ fn list(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, h: &mut 
                 let vg = style::galley_mono(ui, &value, 11.0, vink);
                 let strong = on || resp.hovered();
                 let tools_w = 2.0 * 24.0 + 2.0;
-                let vx = r.right() - 6.0 - tools_w - 7.0 - vg.size().x;
+                let value_x = r.right() - 6.0 - tools_w - 7.0 - vg.size().x;
+                let vx = value_x;
+                let vx = if e.by_ai {
+                    let mark = style::galley(ui, "AI", 9.5, Weight::W600, style::nav(), 0.5);
+                    let x = vx - 7.0 - mark.size().x;
+                    ui.painter()
+                        .galley(Pos2::new(x, r.center().y - mark.size().y / 2.0), mark, style::nav());
+                    x
+                } else {
+                    vx
+                };
                 let ng = style::galley(ui, &e.name, 12.5, Weight::W500, style::text_1(), 0.0);
                 let name_room = (vx - 7.0 - (r.left() + 6.0 + 26.0 + 7.0)).max(0.0);
                 ui.painter_at(Rect::from_min_size(
@@ -483,7 +493,7 @@ fn list(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, h: &mut 
                     style::text_1(),
                 );
                 ui.painter()
-                    .galley(Pos2::new(vx, r.center().y - vg.size().y / 2.0), vg, vink);
+                    .galley(Pos2::new(value_x, r.center().y - vg.size().y / 2.0), vg, vink);
                 ui.set_opacity(if strong { 1.0 } else { 0.7 });
                 let t0 = r.right() - 6.0 - tools_w;
                 if small_tool(

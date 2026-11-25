@@ -234,6 +234,8 @@ pub struct Entity {
     pub alert: bool,
     pub angle: f64,
     pub bearing: f64,
+    /// An AI client added it, so an AI client may change and remove it.
+    pub by_ai: bool,
 }
 
 impl Entity {
@@ -287,6 +289,9 @@ impl Entity {
                 m.insert("bearing".into(), json!(self.bearing));
             }
         }
+        if self.by_ai {
+            m.insert("by_ai".into(), json!(true));
+        }
         Value::Object(m)
     }
 
@@ -316,6 +321,7 @@ impl Entity {
             alert: false,
             angle: 360.0,
             bearing: 0.0,
+            by_ai: false,
         }
     }
 }
@@ -416,6 +422,7 @@ pub fn normalize_entity(raw: &Value) -> Option<Entity> {
         e.color = c.into();
     }
     e.note = plain(o.get("note").and_then(Value::as_str).unwrap_or(""), NOTE_MAX);
+    e.by_ai = o.get("by_ai") == Some(&json!(true));
     if kind.gate {
         let lng2 = finite(o.get("lng2"), f64::NAN);
         let lat2 = finite(o.get("lat2"), f64::NAN);

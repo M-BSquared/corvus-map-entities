@@ -11,6 +11,7 @@
 //! What is placed is saved through `save_settings`; what the aircraft did is
 //! kept for the session only, and "Reset results" starts it again.
 
+pub mod mcp;
 pub mod model;
 mod view;
 
@@ -25,7 +26,7 @@ use self::model::{
 use corvus_api::i18n::{tr as translate, tr_fmt as translate_fmt};
 use corvus_api::plugin::options::OptionSpec;
 use corvus_api::plugin::shapes::{self, circle_ring, Style};
-use corvus_api::plugin::{Host, Info, MapEvent, Plugin};
+use corvus_api::plugin::{Host, Info, MapEvent, McpTool, Plugin, Reply};
 
 const UNDO_SECS: f64 = 8.0;
 const PENDING_KEY: &str = "pending";
@@ -86,6 +87,7 @@ pub struct MapEntities {
     pub opts: Opts,
     started: bool,
     pub open: bool,
+    pub(crate) mcp: mcp::State,
 }
 
 impl Plugin for MapEntities {
@@ -95,7 +97,7 @@ impl Plugin for MapEntities {
             name: "Map Entities",
             icon: "map-pin",
             description: "Gates, trees, people and devices with a range, placed exactly on the Home map",
-            version: "1.0.0",
+            version: "1.1.0",
             order: 35,
             can_tab: true,
         }
@@ -108,6 +110,12 @@ impl Plugin for MapEntities {
             OptionSpec::toggle("armedOnly", "Only check while armed", true),
             OptionSpec::toggle("share", "Share with other plugins", false).hint(
                 "Lets another plugin, such as TAK, read what is placed here. Nothing is shared while this is off, and this plugin works the same without any other.",
+            ),
+            OptionSpec::toggle(mcp::MCP_READ, "AI clients may read what is placed", false).hint(
+                "Through Corvus' MCP server an AI client can list what is placed, with what the aircraft did to it, and show it on the map. It also needs Plugin tools switched on in Settings, Connections, MCP.",
+            ),
+            OptionSpec::toggle(mcp::MCP_EDIT, "AI clients may place things", false).hint(
+                "Through Corvus' MCP server an AI client can place things on the map, and change or remove the ones it added. What you placed stays yours, what it added is marked AI and is not shared with other plugins. Nothing of it reaches the aircraft.",
             ),
         ]
     }
@@ -123,7 +131,20 @@ impl Plugin for MapEntities {
         self.share(h);
     }
 
+    fn mcp_tools(&self, h: &Host) -> Vec<McpTool> {
+        Self::mcp_tools_for(h)
+    }
+
+    fn mcp_call(&mut self, name: &str, args: &Value, token: u64, h: &mut Host) {
+        self.mcp_start(name, args, token, h);
+    }
+
+    fn mcp_take(&mut self, token: u64) -> Option<Result<Value, String>> {
+        self.mcp.take(token)
+    }
+
     fn tick(&mut self, h: &mut Host) {
+        self.mcp_run();
         if let Some(u) = &self.undo {
             if h.now >= u.until {
                 self.undo = None;
@@ -372,16 +393,26 @@ impl MapEntities {
     // ---- saving ---------------------------------------------------------------
 
     pub fn save(&self, h: &mut Host) {
+        let _ = self.save_reply(h);
+    }
+
+    fn save_reply(&self, h: &mut Host) -> Reply {
         let list: Vec<Value> = self.entities.iter().map(Entity::to_json).collect();
-        let _ = h.save_settings(&json!({"entities": list}), false);
+        let reply = h.save_settings(&json!({"entities": list}), false);
         self.share(h);
+        reply
     }
 
     /// Offers the entities to other plugins while the option is on, and takes them
-    /// back when it is off.
+    /// back when it is off. Not what an AI client added: another plugin may send it on.
     fn share(&self, h: &mut Host) {
         if self.opts.share {
-            let list: Vec<Value> = self.entities.iter().map(Entity::shared_json).collect();
+            let list: Vec<Value> = self
+                .entities
+                .iter()
+                .filter(|e| !e.by_ai)
+                .map(Entity::shared_json)
+                .collect();
             h.publish(SHARED_TOPIC, Value::Array(list));
         } else {
             h.retract(SHARED_TOPIC);
