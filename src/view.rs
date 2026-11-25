@@ -26,6 +26,9 @@ pub fn show(p: &mut MapEntities, ui: &mut egui::Ui, area: Rect, h: &mut Host) ->
     y = summary(p, ui, x, y, w) + GAP;
     y = head(ui, x, y, w, "Place", |_, _| false).0 + GAP;
     y = palette(p, ui, x, y, w, h) + GAP;
+    if p.opts.import {
+        y = import_rows(p, ui, x, y, w, h) + GAP;
+    }
     if let Some(pl) = p.placing.clone() {
         y = hint(p, ui, x, y, w, &pl, h) + GAP;
     }
@@ -290,6 +293,44 @@ fn kind_button(ui: &mut egui::Ui, r: Rect, id: &'static str, label: &str, color:
     ui.painter_at(r.shrink2(Vec2::new(4.0, 0.0)))
         .galley(Pos2::new(tx, r.top() + 8.0 + 26.0 + 4.0), g, ink);
     resp.clicked()
+}
+
+/// The button that reads a folder of pictures, and what came of the last time.
+fn import_rows(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, h: &mut Host) -> f32 {
+    let label = if p.importing {
+        "Reading the folder…"
+    } else {
+        "Import from a folder…"
+    };
+    let read = Button::new(label, Variant::Secondary)
+        .icon("folder-open")
+        .small()
+        .enabled(!p.importing)
+        .title("Place a file mark for every picture and video of a folder that says where it was taken");
+    let r = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, read.height()));
+    if read.show(ui, r, "entimport") {
+        p.start_import(h);
+    }
+    let mut y = r.bottom();
+    let Some((said, any)) = p.imported.as_ref().map(|i| (i.said.clone(), !i.ids.is_empty())) else {
+        return y;
+    };
+    y += 6.0;
+    let g = kit::wrapped_weight(ui, &said, 11.5, Weight::W400, style::text_2(), w - 4.0, 1.5);
+    ui.painter().galley(Pos2::new(x + 2.0, y), g.clone(), style::text_2());
+    y += g.size().y;
+    if any {
+        y += 6.0;
+        let back = Button::new("Remove them again", Variant::Secondary)
+            .icon("rotate-ccw")
+            .small();
+        let r = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, back.height()));
+        if back.show(ui, r, "entimportback") {
+            p.remove_imported(h);
+        }
+        y = r.bottom();
+    }
+    y
 }
 
 fn hint(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, pl: &super::Placing, h: &mut Host) -> f32 {

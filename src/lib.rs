@@ -15,7 +15,7 @@ pub mod mcp;
 pub mod model;
 mod view;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
@@ -26,22 +26,27 @@ use self::model::{
 use corvus_api::i18n::{tr as translate, tr_fmt as translate_fmt};
 use corvus_api::plugin::options::OptionSpec;
 use corvus_api::plugin::shapes::{self, circle_ring, Style};
-use corvus_api::plugin::{Host, Info, MapEvent, McpTool, Plugin, Reply};
+use corvus_api::plugin::{FolderScan, Host, Info, MapEvent, McpTool, Plugin, Reply};
 use corvus_api::ui::filepicker::{self, Filter};
 
 const UNDO_SECS: f64 = 8.0;
 const PENDING_KEY: &str = "pending";
+/// The gear's switch for placing the pictures of a folder without any AI client.
+const OPT_IMPORT: &str = "photoImport";
+/// The one folder read this plugin asks for.
+const IMPORT_TAG: u64 = 1;
 /// What this plugin offers other plugins while "Share with other plugins" is on:
 /// the entities as a list, read as `map-entities/shared`.
 pub const SHARED_TOPIC: &str = "shared";
 
-/// The three switches of the plugin's gear.
+/// The switches of the plugin's gear.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Opts {
     pub labels: bool,
     pub notify: bool,
     pub armed_only: bool,
     pub share: bool,
+    pub import: bool,
 }
 
 impl Default for Opts {
@@ -51,6 +56,7 @@ impl Default for Opts {
             notify: true,
             armed_only: true,
             share: false,
+            import: false,
         }
     }
 }
@@ -70,6 +76,12 @@ pub enum Aim {
     Bearing(String),
 }
 
+/// What the last read of a folder placed, and what it says about it.
+pub struct Imported {
+    pub ids: Vec<String>,
+    pub said: String,
+}
+
 /// What a delete can still take back.
 pub struct Undo {
     pub items: Vec<(Entity, usize)>,
@@ -84,6 +96,9 @@ pub struct MapEntities {
     pub placing: Option<Placing>,
     aim: Option<Aim>,
     pub undo: Option<Undo>,
+    /// A folder is being picked or read.
+    pub importing: bool,
+    pub imported: Option<Imported>,
     prev: Option<Sample>,
     pub opts: Opts,
     started: bool,
@@ -111,6 +126,9 @@ impl Plugin for MapEntities {
             OptionSpec::toggle("armedOnly", "Only check while armed", true),
             OptionSpec::toggle("share", "Share with other plugins", false).hint(
                 "Lets another plugin, such as TAK, read what is placed here. Nothing is shared while this is off, and this plugin works the same without any other.",
+            ),
+            OptionSpec::toggle(OPT_IMPORT, "Import photos from a folder", false).hint(
+                "Adds a button that reads the position and time in every picture and video of a folder you choose and places a file mark for each, without any AI client. It needs files that were saved with a GPS position. Videos need ffmpeg.",
             ),
             OptionSpec::toggle(mcp::MCP_READ, "AI clients may read what is placed", false).hint(
                 "Through Corvus' MCP server an AI client can list what is placed, with what the aircraft did to it, and show it on the map. It also needs Plugin tools switched on in Settings, Connections, MCP.",
@@ -165,6 +183,16 @@ impl Plugin for MapEntities {
         self.stop_placing(h);
         self.aim = None;
         self.undo = None;
+        self.imported = None;
+    }
+
+    fn media_scanned(&mut self, tag: u64, scan: Option<FolderScan>, h: &mut Host) {
+        if tag == IMPORT_TAG {
+            self.importing = false;
+            if let Some(scan) = scan {
+                self.take_scan(scan, h);
+            }
+        }
     }
 
     fn options_changed(&mut self, h: &mut Host) {
@@ -235,7 +263,11 @@ impl MapEntities {
             notify: on("notify"),
             armed_only: on("armedOnly"),
             share: o.get("share").and_then(Value::as_bool) == Some(true),
+            import: o.get(OPT_IMPORT).and_then(Value::as_bool) == Some(true),
         };
+        if !self.opts.import {
+            self.imported = None;
+        }
     }
 
     pub fn find(&self, id: &str) -> Option<&Entity> {
@@ -494,6 +526,102 @@ impl MapEntities {
         }
     }
 
+    // ---- the pictures of a folder ---------------------------------------------
+
+    /// Has the operator pick a folder; the program reads where its pictures were taken.
+    pub fn start_import(&mut self, h: &mut Host) {
+        if self.importing || !self.opts.import {
+            return;
+        }
+        self.importing = true;
+        self.imported = None;
+        h.scan_media_folder(IMPORT_TAG);
+    }
+
+    /// Places a file mark for each file of a read folder that is not on the map yet,
+    /// and says what came of it.
+    fn take_scan(&mut self, scan: FolderScan, h: &mut Host) {
+        if let Some(why) = scan.error {
+            self.imported = Some(Imported {
+                ids: Vec::new(),
+                said: translate(&why).into_owned(),
+            });
+            return;
+        }
+        let mut there: HashSet<String> = self
+            .entities
+            .iter()
+            .filter(|e| e.is_file())
+            .map(|e| e.path.clone())
+            .collect();
+        let (mut already, mut full, mut unplaced) = (0u32, 0u32, scan.without_place);
+        let first = self.entities.len();
+        for found in &scan.files {
+            if there.contains(&clean_path(&found.path)) {
+                already += 1;
+            } else if self.entities.len() >= MAX_ENTITIES {
+                full += 1;
+            } else if let Some(e) = model::entity_from_scan(found, &self.entities) {
+                there.insert(e.path.clone());
+                self.entities.push(e);
+            } else {
+                unplaced += 1;
+            }
+        }
+        let new = &self.entities[first..];
+        let ids: Vec<String> = new.iter().map(|e| e.id.clone()).collect();
+        let points: Vec<[f64; 2]> = new.iter().flat_map(points_of).collect();
+        let count = |text: &str, n: u32| (n > 0).then(|| translate_fmt(text, &[("n", &n.to_string())]));
+        let mut said = vec![translate_fmt("Files placed: {n}", &[("n", &ids.len().to_string())])];
+        said.extend(
+            [
+                count("Already on the map: {n}", already),
+                count("Without a position: {n}", unplaced),
+                count("Videos not read, ffmpeg is not installed: {n}", scan.videos_unread),
+                count("Left out, the map is full: {n}", full),
+                scan.cut
+                    .then(|| translate("The folder holds more files than were read.").into_owned()),
+            ]
+            .into_iter()
+            .flatten(),
+        );
+        if !ids.is_empty() {
+            self.draw_all(h);
+            self.save(h);
+            h.fit(points);
+        }
+        self.imported = Some(Imported {
+            ids,
+            said: said.join("\n"),
+        });
+    }
+
+    /// Takes back what the last folder placed; the delete can be undone as any other.
+    pub fn remove_imported(&mut self, h: &mut Host) {
+        let Some(imported) = self.imported.take() else { return };
+        let ids: HashSet<String> = imported.ids.into_iter().collect();
+        let mut gone = Vec::new();
+        let mut kept = Vec::new();
+        for (i, e) in std::mem::take(&mut self.entities).into_iter().enumerate() {
+            if ids.contains(&e.id) {
+                gone.push((e, i));
+            } else {
+                kept.push(e);
+            }
+        }
+        self.entities = kept;
+        for (e, _) in &gone {
+            self.undraw(&e.id, h);
+        }
+        if self.selected.as_ref().is_some_and(|id| ids.contains(id)) {
+            self.selected = None;
+        }
+        if !gone.is_empty() {
+            self.save(h);
+            self.remember(gone, h);
+        }
+    }
+
     // ---- editing --------------------------------------------------------------
 
     pub fn select(&mut self, id: Option<String>, h: &mut Host) {
@@ -718,6 +846,71 @@ mod tests {
         assert_eq!(entity_of_key("my-id_1-a"), Some("my-id_1".into()));
         assert_eq!(entity_of_key("pending"), None);
         assert_eq!(entity_of_key("x-z"), None);
+    }
+
+    #[test]
+    fn a_second_import_adds_nothing_twice_and_the_last_one_can_be_taken_back() {
+        use corvus_api::plugin::bus::Bus;
+        use corvus_api::plugin::shapes::ShapeSet;
+        use corvus_api::plugin::{Outbox, Placed};
+        let ctx = corvus_api::egui::Context::default();
+        let server = corvus_api::net::http::Server::local(9);
+        let (state, mut saved, options) = (json!({}), json!({}), serde_json::Map::new());
+        let (mut shapes, mut out, mut bus) = (ShapeSet::new("map-entities"), Outbox::default(), Bus::default());
+        let info = MapEntities::default().info();
+        let mut h = Host::new(
+            &ctx,
+            &server,
+            &state,
+            info,
+            &mut shapes,
+            &mut saved,
+            &options,
+            &mut out,
+            &mut bus,
+        );
+        let mut p = MapEntities::default();
+        p.opts.import = true;
+        let found = |path: &str| Placed {
+            path: path.into(),
+            lat: 48.0,
+            lng: 11.0,
+            ..Placed::default()
+        };
+        p.add(model::make_entity("tree", [11.0, 48.0], None, &[]).unwrap(), &mut h);
+        p.start_import(&mut h);
+        assert!(p.importing);
+        let scan = |files: &[&str]| {
+            Some(FolderScan {
+                files: files.iter().map(|f| found(f)).collect(),
+                without_place: 2,
+                ..FolderScan::default()
+            })
+        };
+        p.media_scanned(IMPORT_TAG, scan(&["/c/a.jpg", "/c/b.jpg", "/c/a.jpg"]), &mut h);
+        assert!(!p.importing);
+        assert_eq!(p.entities.len(), 3);
+        let said = &p.imported.as_ref().unwrap().said;
+        assert_eq!(said, "Files placed: 2\nAlready on the map: 1\nWithout a position: 2");
+
+        p.media_scanned(IMPORT_TAG, scan(&["/c/b.jpg", "/c/c.jpg"]), &mut h);
+        assert_eq!(p.entities.len(), 4);
+        p.remove_imported(&mut h);
+        let names: Vec<&str> = p.entities.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["Tree 1", "a.jpg", "b.jpg"], "only the last import goes");
+        p.undo_delete(&mut h);
+        assert_eq!(p.entities.len(), 4);
+
+        // A folder given up, and one that cannot be read.
+        p.start_import(&mut h);
+        p.media_scanned(IMPORT_TAG, None, &mut h);
+        assert!(!p.importing && p.imported.is_none());
+        let broken = FolderScan {
+            error: Some("The folder cannot be read.".into()),
+            ..FolderScan::default()
+        };
+        p.media_scanned(IMPORT_TAG, Some(broken), &mut h);
+        assert!(p.imported.as_ref().is_some_and(|i| i.ids.is_empty()));
     }
 
     #[test]

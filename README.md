@@ -7,7 +7,9 @@ Gates, trees, people and devices with a range, placed exactly on the Home map
 and checked against the aircraft's track: through a gate, over it or under it,
 and whether it entered an area. A file mark holds the path of a picture or video
 recorded at its place and shows it on a double click; an AI client allowed to
-place things can set these from a picture's metadata.
+place things can set these from a picture's metadata. Without any AI, the switch
+**Import photos from a folder** in the gear adds a button that places one for
+every picture and video of a folder that says where it was taken.
 
 Install it in Corvus GCS under Settings, Plugins. The full description is in
 the [Corvus guide](https://m-bsquared.github.io/CorvusGCS/guide/plugins.html#map-entities).

@@ -4,6 +4,7 @@
 //! held against gates and zones. Geometry is metres on a flat plane around each
 //! entity, as the web version does it. Held to what the web functions answered.
 
+use corvus_api::plugin::Placed;
 use serde_json::{json, Map, Value};
 
 pub const MAX_ENTITIES: usize = 500;
@@ -424,6 +425,29 @@ pub fn entity_from_message(msg: &Value, existing: &[Entity]) -> Option<Entity> {
         e.name = name;
     }
     e.note = plain(msg.get("note").and_then(Value::as_str).unwrap_or(""), NOTE_MAX);
+    Some(e)
+}
+
+/// A file mark for a picture or a video the program read in a folder: at the place
+/// the file says, named after it, with its time and height in the note. `None` for
+/// what says no place on the map.
+pub fn entity_from_scan(found: &Placed, existing: &[Entity]) -> Option<Entity> {
+    let mut e = make_entity(FILE_KIND, [found.lng, found.lat], None, existing)?;
+    e.path = clean_path(&found.path);
+    let name = plain(e.file_name(), NAME_MAX);
+    if !name.is_empty() {
+        e.name = name;
+    }
+    let height = found
+        .alt
+        .filter(|a| a.is_finite())
+        .map(|a| format!("{} AMSL", metres(a)));
+    let note: Vec<String> = [Some(found.taken.clone()), height]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .collect();
+    e.note = plain(&note.join(", "), NOTE_MAX);
     Some(e)
 }
 
@@ -1480,6 +1504,34 @@ mod tests {
         };
         assert!(process_step(&[e], &mut results, at(10.999), at(11.001), 0.0).is_empty());
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn a_read_photo_becomes_a_file_mark_where_it_was_taken() {
+        let found = Placed {
+            path: "/card/DCIM/DJI_0001.JPG".into(),
+            lat: 48.0764,
+            lng: 11.6429,
+            alt: Some(520.5),
+            taken: "2026-11-25 14:02:11".into(),
+        };
+        let e = entity_from_scan(&found, &[]).unwrap();
+        assert!(e.is_file() && !e.by_ai);
+        assert_eq!((e.name.as_str(), e.lat, e.lng), ("DJI_0001.JPG", 48.0764, 11.6429));
+        assert_eq!(e.path, found.path);
+        assert!(
+            e.note.starts_with("2026-11-25 14:02:11, ") && e.note.ends_with(" m AMSL"),
+            "{}",
+            e.note
+        );
+        assert_eq!(normalize_entity(&e.to_json()).unwrap(), e);
+        let bare = Placed {
+            alt: None,
+            taken: String::new(),
+            ..found.clone()
+        };
+        assert_eq!(entity_from_scan(&bare, &[]).unwrap().note, "");
+        assert_eq!(entity_from_scan(&Placed { lat: 91.0, ..found }, &[]), None);
     }
 
     #[test]
