@@ -11,13 +11,14 @@
 use corvus_api::plugin::{Host, McpTool, Reply};
 use serde_json::{json, Map, Value};
 
-use super::model::{normalize_entity, points_of, Entity, Results, KINDS, MAX_ENTITIES};
+use super::model::{media_path, normalize_entity, points_of, Entity, Results, FILE_KIND, KINDS, MAX_ENTITIES};
 use super::MapEntities;
 
 pub const MCP_READ: &str = "mcp_read";
 pub const MCP_EDIT: &str = "mcp_edit";
-/// So a client that does not stop leaves room for the operator.
-pub const MAX_BY_AI: usize = 100;
+/// So a client that does not stop leaves room for the operator. Enough for the
+/// pictures of a flight.
+pub const MAX_BY_AI: usize = 400;
 const DONE_MAX: usize = 32;
 
 struct Saving {
@@ -50,6 +51,7 @@ fn fields() -> Value {
     let kinds: Vec<&str> = KINDS.iter().map(|k| k.id).collect();
     json!({
         "kind": {"type": "string", "enum": kinds},
+        "path": {"type": "string", "description": "Only for kind file: the full path of the picture or video on the computer Corvus GCS runs on"},
         "name": {"type": "string", "description": "At most 60 characters"},
         "note": {"type": "string", "description": "At most 300 characters"},
         "color": {"type": "string", "description": "#RRGGBB"},
@@ -101,7 +103,7 @@ pub fn tools(read: bool, edit: bool) -> Vec<McpTool> {
         out.push(tool(
             "add_entity",
             "Place a map entity",
-            "Place a gate (two posts), a tree or a symbol with an optional area on the Home map. It is only drawn: the aircraft does not avoid it and nothing is sent to it. Returns the entity as it was placed.",
+            "Place a gate (two posts), a tree, a symbol with an optional area, or a file marker on the Home map. Kind file marks where a picture or a video was recorded: take lat and lon from its metadata, give its path, and put the time into note. The operator opens it with a double click. All of it is only drawn: nothing is sent to the aircraft. Returns the entity as it was placed.",
             json!({"type": "object", "properties": props.clone(), "required": ["kind", "lat", "lon"]}),
             false,
         ));
@@ -152,6 +154,11 @@ pub fn describe(e: &Entity, r: Option<&Results>) -> Value {
             }
         }
         m.remove("by_ai");
+        // A path a client gave is its own to read again. Where the operator's files
+        // lie is not: of those it learns the name.
+        if !e.by_ai && m.remove("path").is_some() && !e.path.is_empty() {
+            m.insert("file".into(), json!(e.file_name()));
+        }
         m.insert("added_by_ai".into(), json!(e.by_ai));
         if let Some(r) = r {
             let did = if e.is_gate() {
@@ -216,6 +223,12 @@ pub fn entity_from(args: &Value, base: Option<&Entity>, fresh_name: impl Fn(&str
                 raw.insert(to.into(), json!(n.ok_or_else(|| format!("{key} must be a number"))?));
             }
         }
+    }
+    if let Some(path) = text(args, "path")? {
+        if raw.get("kind") != Some(&json!(FILE_KIND)) {
+            return Err("path is only for kind file".into());
+        }
+        raw.insert("path".into(), json!(media_path(path)?));
     }
     match args.get("alert") {
         None | Some(Value::Null) => {}
@@ -346,6 +359,46 @@ mod tests {
 
     fn names(read: bool, edit: bool) -> Vec<String> {
         tools(read, edit).into_iter().map(|t| t.name).collect()
+    }
+
+    #[test]
+    fn a_client_places_a_file_with_its_path_and_learns_no_path_of_the_operators() {
+        let make = |args: Value| entity_from(&args, None, |_| "File 1".into());
+        let args = json!({"kind": "file", "lat": 48, "lon": 11, "path": "~/DCIM/DJI_0001.JPG", "note": "14:02:11"});
+        let placed = make(args).unwrap();
+        assert_eq!((placed.path.as_str(), placed.by_ai), ("~/DCIM/DJI_0001.JPG", true));
+        assert_eq!(describe(&placed, None)["path"], "~/DCIM/DJI_0001.JPG");
+        for good in ["/home/p/a b.mp4", "C:\\photos\\a.jpg", "D:/a.MOV"] {
+            assert!(
+                make(json!({"kind": "file", "lat": 48, "lon": 11, "path": good})).is_ok(),
+                "{good}"
+            );
+        }
+        for bad in [
+            "a.jpg",
+            "../a.jpg",
+            "//server/share/a.jpg",
+            "\\\\server\\a.jpg",
+            "http://x/a.jpg",
+            "/tmp/run.sh",
+            "/etc/passwd",
+        ] {
+            let why = make(json!({"kind": "file", "lat": 48, "lon": 11, "path": bad})).unwrap_err();
+            assert!(why.starts_with("path must"), "{bad}: {why}");
+        }
+        let why = make(json!({"kind": "tree", "lat": 48, "lon": 11, "path": "/a.jpg"})).unwrap_err();
+        assert_eq!(why, "path is only for kind file");
+        let moved = entity_from(&json!({"path": "/other/b.png"}), Some(&placed), |_| String::new()).unwrap();
+        assert_eq!(moved.path, "/other/b.png");
+
+        let mut own = placed;
+        own.by_ai = false;
+        own.path = "/home/pilot/secret/flight.mp4".into();
+        let told = describe(&own, None).to_string();
+        assert!(
+            told.contains("\"file\":\"flight.mp4\"") && !told.contains("secret"),
+            "{told}"
+        );
     }
 
     #[test]

@@ -7,5 +7,5 @@
   "order": 35,
   "can_tab": true,
   "min_corvus": "2026.11.94",
-  "permissions": ["ai.tools"]
+  "permissions": ["ai.tools", "files"]
 }

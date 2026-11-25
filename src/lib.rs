@@ -20,13 +20,14 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 
 use self::model::{
-    bearing_deg, make_entity, normalize_list, points_of, process_step, sample_of, sector_ring, status_color, Entity,
-    Results, Sample, MAX_ENTITIES, MAX_STEP_M, MIN_STEP_M,
+    bearing_deg, clean_path, make_entity, normalize_list, points_of, process_step, sample_of, sector_ring,
+    status_color, Entity, Results, Sample, MAX_ENTITIES, MAX_STEP_M, MEDIA_FILES, MIN_STEP_M,
 };
 use corvus_api::i18n::{tr as translate, tr_fmt as translate_fmt};
 use corvus_api::plugin::options::OptionSpec;
 use corvus_api::plugin::shapes::{self, circle_ring, Style};
 use corvus_api::plugin::{Host, Info, MapEvent, McpTool, Plugin, Reply};
+use corvus_api::ui::filepicker::{self, Filter};
 
 const UNDO_SECS: f64 = 8.0;
 const PENDING_KEY: &str = "pending";
@@ -115,7 +116,7 @@ impl Plugin for MapEntities {
                 "Through Corvus' MCP server an AI client can list what is placed, with what the aircraft did to it, and show it on the map. It also needs Plugin tools switched on in Settings, Connections, MCP.",
             ),
             OptionSpec::toggle(mcp::MCP_EDIT, "AI clients may place things", false).hint(
-                "Through Corvus' MCP server an AI client can place things on the map, and change or remove the ones it added. What you placed stays yours, what it added is marked AI and is not shared with other plugins. Nothing of it reaches the aircraft.",
+                "Through Corvus' MCP server an AI client can place things on the map, and change or remove the ones it added. That includes file markers with the path of a picture or video, which opens when you double click it. What you placed stays yours, what it added is marked AI and is not shared with other plugins. Nothing of it reaches the aircraft.",
             ),
         ]
     }
@@ -179,6 +180,12 @@ impl Plugin for MapEntities {
                     self.select(Some(id), h);
                 }
             }
+            MapEvent::DoubleClick(key) => {
+                if let Some(id) = entity_of_key(&key) {
+                    self.select(Some(id.clone()), h);
+                    self.open_file(&id, h);
+                }
+            }
             MapEvent::Drag(key, at) => self.drag_preview(&key, at, h),
             MapEvent::DragEnd(key, at) => self.drag_end(&key, at, h),
             MapEvent::Picked(at) => self.picked(at, h),
@@ -198,6 +205,18 @@ impl Plugin for MapEntities {
 
     fn show(&mut self, ui: &mut corvus_api::egui::Ui, area: corvus_api::egui::Rect, h: &mut Host) -> f32 {
         view::show(self, ui, area, h)
+    }
+}
+
+/// How large the symbol of an entity is on the map. File markers are the smallest: the
+/// pictures of one flight lie close together.
+fn marker_size(e: &Entity) -> f32 {
+    if e.is_file() {
+        20.0
+    } else if e.is_tree() {
+        24.0
+    } else {
+        28.0
     }
 }
 
@@ -337,14 +356,19 @@ impl MapEntities {
         } else {
             m.remove(&key);
         }
+        let title = if e.path.is_empty() {
+            e.name.clone()
+        } else {
+            translate_fmt("{name}: double click to open the file", &[("name", &e.name)])
+        };
         m.marker(
             &format!("{id}-m"),
             [e.lng, e.lat],
             e.kind.id,
             label,
-            &e.name,
+            &title,
             style,
-            Some(if e.is_tree() { 24.0 } else { 28.0 }),
+            Some(marker_size(e)),
             selected,
             selected,
             true,
@@ -432,6 +456,41 @@ impl MapEntities {
             }
             Some(_) => h.notify("warning", &translate("Map Entities is full, nothing was added.")),
             None => h.notify("warning", &translate("Map Entities could not place that point.")),
+        }
+    }
+
+    // ---- files ----------------------------------------------------------------
+
+    /// Shows a file entity's picture or video in a card of the program. Any other
+    /// kind has nothing to open.
+    pub fn open_file(&mut self, id: &str, h: &mut Host) {
+        let Some(e) = self.find(id).filter(|e| e.is_file()) else {
+            return;
+        };
+        if e.path.is_empty() {
+            let say = translate_fmt(
+                "{name} has no file yet. Choose one for it in Map Entities.",
+                &[("name", &e.name)],
+            );
+            h.notify("info", &say);
+        } else {
+            h.show_file(&e.path, &e.name);
+        }
+    }
+
+    /// Asks the operator for the picture or video of a file entity.
+    pub fn choose_file(&mut self, id: &str, h: &mut Host) {
+        let Some(current) = self.find(id).map(|e| e.path.clone()) else {
+            return;
+        };
+        let filter = Filter {
+            name: "Pictures and videos",
+            extensions: &MEDIA_FILES,
+        };
+        let start = filepicker::start_folder(&current);
+        if let Some(path) = filepicker::pick_file("Choose a picture or video", Some(filter), start.as_deref()) {
+            let path = clean_path(&path.to_string_lossy());
+            self.update(id, h, |e| e.path = path);
         }
     }
 
@@ -659,6 +718,14 @@ mod tests {
         assert_eq!(entity_of_key("my-id_1-a"), Some("my-id_1".into()));
         assert_eq!(entity_of_key("pending"), None);
         assert_eq!(entity_of_key("x-z"), None);
+    }
+
+    #[test]
+    fn a_file_marker_is_smaller_than_every_other_symbol() {
+        let size = |kind| marker_size(&model::make_entity(kind, [11.0, 48.0], None, &[]).unwrap());
+        for kind in model::KINDS.iter().filter(|k| !k.gate && k.id != model::FILE_KIND) {
+            assert!(size(model::FILE_KIND) < size(kind.id), "{}", kind.id);
+        }
     }
 
     #[test]

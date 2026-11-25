@@ -5,7 +5,9 @@ offline ground control station for PX4 and ArduPilot.
 
 Gates, trees, people and devices with a range, placed exactly on the Home map
 and checked against the aircraft's track: through a gate, over it or under it,
-and whether it entered an area.
+and whether it entered an area. A file mark holds the path of a picture or video
+recorded at its place and shows it on a double click; an AI client allowed to
+place things can set these from a picture's metadata.
 
 Install it in Corvus GCS under Settings, Plugins. The full description is in
 the [Corvus guide](https://m-bsquared.github.io/CorvusGCS/guide/plugins.html#map-entities).

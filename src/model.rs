@@ -10,6 +10,9 @@ pub const MAX_ENTITIES: usize = 500;
 pub const MAX_RESULTS: usize = 50;
 pub const NAME_MAX: usize = 60;
 pub const NOTE_MAX: usize = 300;
+pub const PATH_MAX: usize = 4096;
+/// The kind that marks where a picture or a video was recorded, and holds its path.
+pub const FILE_KIND: &str = "file";
 /// A jump this long between two samples is a lost link or a new fix.
 pub const MAX_STEP_M: f64 = 500.0;
 pub const MIN_STEP_M: f64 = 0.3;
@@ -58,7 +61,7 @@ const fn point(id: &'static str, label: &'static str, color: &'static str, radiu
     }
 }
 
-pub const KINDS: [Kind; 14] = [
+pub const KINDS: [Kind; 15] = [
     Kind {
         id: "gate",
         label: "Gate",
@@ -85,6 +88,7 @@ pub const KINDS: [Kind; 14] = [
     point("target", "Target", "#FF5C5C", 0.0, false),
     point("pad", "Landing pad", "#5B8DEF", 0.0, false),
     point("flag", "Flag", "#2BC4E4", 0.0, false),
+    point(FILE_KIND, "File", "#C77DFF", 0.0, false),
 ];
 
 pub fn kind_of(id: &str) -> Option<&'static Kind> {
@@ -236,6 +240,8 @@ pub struct Entity {
     pub bearing: f64,
     /// An AI client added it, so an AI client may change and remove it.
     pub by_ai: bool,
+    /// A file entity's picture or video, on this computer; empty while none is chosen.
+    pub path: String,
 }
 
 impl Entity {
@@ -245,6 +251,15 @@ impl Entity {
 
     pub fn is_tree(&self) -> bool {
         self.kind.id == "tree"
+    }
+
+    pub fn is_file(&self) -> bool {
+        self.kind.id == FILE_KIND
+    }
+
+    /// The name of the chosen file, without its folders.
+    pub fn file_name(&self) -> &str {
+        self.path.rsplit(['/', '\\']).next().unwrap_or("")
     }
 
     /// The angle of a zone's area in degrees: 360 for a full circle. A tree's
@@ -279,6 +294,8 @@ impl Entity {
             ] {
                 m.insert(k.into(), json!(v));
             }
+        } else if self.is_file() {
+            m.insert("path".into(), json!(self.path));
         } else {
             m.insert("radius".into(), json!(self.radius));
             m.insert("alert".into(), json!(self.alert));
@@ -295,10 +312,12 @@ impl Entity {
         Value::Object(m)
     }
 
-    /// What other plugins read: the saved fields and the kind's label.
+    /// What other plugins read: the saved fields and the kind's label. Not where a
+    /// file lies: another plugin may send what it reads on to other people.
     pub fn shared_json(&self) -> Value {
         let mut v = self.to_json();
         if let Some(m) = v.as_object_mut() {
+            m.remove("path");
             m.insert("label".into(), json!(self.kind.label));
         }
         v
@@ -322,8 +341,51 @@ impl Entity {
             angle: 360.0,
             bearing: 0.0,
             by_ai: false,
+            path: String::new(),
         }
     }
+}
+
+/// What the file dialog offers for a file entity: what the media card shows.
+pub const MEDIA_FILES: [&str; 21] = [
+    "jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "heic", "heif", "gif", "mp4", "mov", "m4v", "mkv", "avi",
+    "webm", "ts", "mts", "m2ts", "mpg", "mpeg",
+];
+
+/// A path an AI client or another program named: a full one on this computer to a
+/// picture or a video. Whether the file is there shows when it is opened.
+pub fn media_path(text: &str) -> Result<String, String> {
+    let path = clean_path(text);
+    let drive = path.as_bytes();
+    let drive =
+        drive.len() > 2 && drive[0].is_ascii_alphabetic() && drive[1] == b':' && matches!(drive[2], b'/' | b'\\');
+    let local = (path.starts_with('/') && !path.starts_with("//")) || path.starts_with("~/") || drive;
+    if !local {
+        return Err(
+            "path must be the full path of a file on the computer Corvus GCS runs on, starting with /, ~/ or a drive letter".into(),
+        );
+    }
+    let kind = path
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !MEDIA_FILES.contains(&kind.as_str()) {
+        return Err(format!(
+            "path must name a picture or a video ({})",
+            MEDIA_FILES.join(", ")
+        ));
+    }
+    Ok(path)
+}
+
+/// A path as it is saved: trimmed, without quotes or line breaks, its spaces kept.
+pub fn clean_path(text: &str) -> String {
+    text.trim()
+        .trim_matches('"')
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(PATH_MAX)
+        .collect()
 }
 
 /// `Gate 3`, `Tree 4`: the next free number of the kind.
@@ -433,6 +495,8 @@ pub fn normalize_entity(raw: &Value) -> Option<Entity> {
         e.lat2 = lat2;
         e.base = clamp(finite(o.get("base"), kind.base), -1000.0, 10000.0);
         e.height = clamp(finite(o.get("height"), kind.height), 0.0, 10000.0);
+    } else if e.is_file() {
+        e.path = clean_path(o.get("path").and_then(Value::as_str).unwrap_or(""));
     } else {
         e.radius = clamp(finite(o.get("radius"), kind.radius), 0.0, 100_000.0);
         e.alert = match o.get("alert") {
@@ -687,6 +751,10 @@ pub fn process_step(
 ) -> Vec<Event> {
     let mut events = Vec::new();
     for e in entities {
+        // A file only marks a place: nothing is flown through or into.
+        if e.is_file() {
+            continue;
+        }
         let r = results.entry(e.id.clone()).or_default();
         if e.is_gate() {
             let Some(c) = gate_crossing(e, prev, cur) else { continue };
@@ -797,6 +865,13 @@ pub fn row_detail(e: &Entity, r: Option<&Results>) -> (String, &'static str) {
             Some(r) if r.passes > 0 => (format!("{}\u{d7} through", r.passes), "good"),
             Some(r) if r.misses > 0 => (format!("{}\u{d7} missed", r.misses), "warn"),
             _ => (metres(distance_m([e.lng, e.lat], [e.lng2, e.lat2])), ""),
+        };
+    }
+    if e.is_file() {
+        return if e.path.is_empty() {
+            ("no file".into(), "")
+        } else {
+            (e.file_name().to_string(), "")
         };
     }
     if e.is_tree() {
@@ -1379,6 +1454,32 @@ mod tests {
             };
             assert_eq!(normalize_entity(&e.to_json()).unwrap(), e, "{}", k.id);
         }
+    }
+
+    #[test]
+    fn a_file_keeps_its_path_and_only_marks_a_place() {
+        let mut e = make_entity(FILE_KIND, [11.0, 48.0], None, &[]).unwrap();
+        assert_eq!((e.name.as_str(), e.path.as_str()), ("File 1", ""));
+        assert_eq!(row_detail(&e, None).0, "no file");
+        e.path = clean_path("  \"/home/pilot/DCIM/two  spaces.MP4\"\n");
+        assert_eq!(e.path, "/home/pilot/DCIM/two  spaces.MP4");
+        assert_eq!(e.file_name(), "two  spaces.MP4");
+        assert_eq!(row_detail(&e, None).0, "two  spaces.MP4");
+        let back = normalize_entity(&e.to_json()).unwrap();
+        assert_eq!(back, e);
+        let saved = e.to_json();
+        assert!(saved.get("radius").is_none() && saved.get("alert").is_none(), "{saved}");
+        assert!(e.shared_json().get("path").is_none(), "where a file lies is not shared");
+        e.path = "C:\\Users\\pilot\\a.jpg".into();
+        assert_eq!(e.file_name(), "a.jpg");
+        let mut results = std::collections::HashMap::new();
+        let at = |lng| Sample {
+            lng,
+            lat: 48.0,
+            alt: 5.0,
+        };
+        assert!(process_step(&[e], &mut results, at(10.999), at(11.001), 0.0).is_empty());
+        assert!(results.is_empty());
     }
 
     #[test]

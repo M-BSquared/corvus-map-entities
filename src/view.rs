@@ -2,11 +2,12 @@
 //! palette, the list and the editor of the selected entity.
 
 use corvus_api::egui::{self, Color32, Pos2, Rect, Stroke, StrokeKind, Vec2};
+use corvus_api::i18n::tr;
 use corvus_api::ui::tip::HoverTr;
 
 use super::model::{
-    bearing_deg, distance_m, format_degrees, kind_of, log_text, metres, parse_coordinate_pair, parse_degrees,
-    plain_name, points_of, row_detail, status_color, Entity, COLORS, KINDS, NAME_MAX, NOTE_MAX,
+    bearing_deg, clean_path, distance_m, format_degrees, kind_of, log_text, metres, parse_coordinate_pair,
+    parse_degrees, plain_name, points_of, row_detail, status_color, Entity, COLORS, KINDS, NAME_MAX, NOTE_MAX,
 };
 use super::{Aim, MapEntities};
 use corvus_api::plugin::shapes::{hex, paint_glyph};
@@ -46,7 +47,7 @@ pub fn show(p: &mut MapEntities, ui: &mut egui::Ui, area: Rect, h: &mut Host) ->
     if p.entities.is_empty() {
         let g = kit::wrapped_weight(
             ui,
-            "Nothing placed yet. Pick a gate or a tree above, then click the map.",
+            "Nothing placed yet. Pick something above, then click the map.",
             11.5,
             Weight::W400,
             style::text_3(),
@@ -235,26 +236,14 @@ pub fn palette_columns(w: f32) -> usize {
 fn palette(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, h: &mut Host) -> f32 {
     let mut pressed: Option<&'static str> = None;
     let active = p.placing.as_ref().map(|pl| pl.kind);
-    let main_w = (w - 5.0) / 2.0;
-    for (i, k) in KINDS.iter().take(2).enumerate() {
-        let r = Rect::from_min_size(Pos2::new(x + i as f32 * (main_w + 5.0), y), Vec2::new(main_w, 48.0));
-        if kind_button(ui, r, k.id, k.label, k.color, true, active == Some(k.id)) {
-            pressed = Some(k.id);
-        }
-    }
-    let rest_y = y + 48.0 + 5.0;
     let cols = palette_columns(w);
     let cw = (w - 5.0 * (cols as f32 - 1.0)) / cols as f32;
-    let others = &KINDS[2..];
-    for (i, k) in others.iter().enumerate() {
+    for (i, k) in KINDS.iter().enumerate() {
         let r = Rect::from_min_size(
-            Pos2::new(
-                x + (i % cols) as f32 * (cw + 5.0),
-                rest_y + (i / cols) as f32 * (59.0 + 5.0),
-            ),
+            Pos2::new(x + (i % cols) as f32 * (cw + 5.0), y + (i / cols) as f32 * (59.0 + 5.0)),
             Vec2::new(cw, 59.0),
         );
-        if kind_button(ui, r, k.id, k.label, k.color, false, active == Some(k.id)) {
+        if kind_button(ui, r, k.id, k.label, k.color, active == Some(k.id)) {
             pressed = Some(k.id);
         }
     }
@@ -265,19 +254,11 @@ fn palette(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, h: &m
             p.start_placing(id, h);
         }
     }
-    let rows = others.len().div_ceil(cols);
-    rest_y + rows as f32 * 59.0 + (rows as f32 - 1.0) * 5.0
+    let rows = KINDS.len().div_ceil(cols);
+    y + rows as f32 * 59.0 + (rows as f32 - 1.0) * 5.0
 }
 
-fn kind_button(
-    ui: &mut egui::Ui,
-    r: Rect,
-    id: &'static str,
-    label: &str,
-    color: &str,
-    main: bool,
-    active: bool,
-) -> bool {
+fn kind_button(ui: &mut egui::Ui, r: Rect, id: &'static str, label: &str, color: &str, active: bool) -> bool {
     let resp = ui
         .interact(r, ui.scope_id().with(("enkind", id)), egui::Sense::click())
         .on_hover_tr(format!("Place: {label}"));
@@ -292,28 +273,22 @@ fn kind_button(
         (style::surface_2(), style::border_soft())
     };
     card::paint(ui.painter(), r, card::Look::custom(fill, line, style::RADIUS_BTN));
-    let ink = if main || active || resp.hovered() {
+    let ink = if active || resp.hovered() {
         style::text_1()
     } else {
         style::text_2()
     };
-    let c = color_of(color);
-    if main {
-        let g = style::galley(ui, label, 12.0, Weight::W600, ink, 0.0);
-        let total = 26.0 + 8.0 + g.size().x;
-        let x0 = r.center().x - total / 2.0;
-        badge(ui, Pos2::new(x0, r.center().y - 13.0), id, c, 18.0);
-        ui.painter()
-            .galley(Pos2::new(x0 + 34.0, r.center().y - g.size().y / 2.0), g, ink);
-    } else {
-        badge(ui, Pos2::new(r.center().x - 13.0, r.top() + 8.0), id, c, 15.0);
-        let g = kit::wrapped_weight(ui, label, 11.0, Weight::W400, ink, r.width() - 8.0, 1.2);
-        let clip = ui.painter_at(r.shrink2(Vec2::new(4.0, 0.0)));
-        let one = style::galley(ui, label, 11.0, Weight::W400, ink, 0.0);
-        let _ = g;
-        let tx = (r.center().x - one.size().x / 2.0).max(r.left() + 4.0);
-        clip.galley(Pos2::new(tx, r.top() + 8.0 + 26.0 + 4.0), one, ink);
-    }
+    badge(
+        ui,
+        Pos2::new(r.center().x - 13.0, r.top() + 8.0),
+        id,
+        color_of(color),
+        15.0,
+    );
+    let g = style::galley(ui, label, 11.0, Weight::W400, ink, 0.0);
+    let tx = (r.center().x - g.size().x / 2.0).max(r.left() + 4.0);
+    ui.painter_at(r.shrink2(Vec2::new(4.0, 0.0)))
+        .galley(Pos2::new(tx, r.top() + 8.0 + 26.0 + 4.0), g, ink);
     resp.clicked()
 }
 
@@ -430,6 +405,7 @@ fn list(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, h: &mut 
     let mut select: Option<String> = None;
     let mut locate: Option<usize> = None;
     let mut delete: Option<String> = None;
+    let mut open: Option<String> = None;
     egui::ScrollArea::vertical()
         .id_salt("entlist")
         .auto_shrink([false, false])
@@ -461,6 +437,12 @@ fn list(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, h: &mut 
                     14.0,
                 );
                 let (value, level) = row_detail(e, p.results.get(&e.id));
+                // The words of the interface are translated; the name of a file is not one.
+                let value = if e.is_file() && !e.path.is_empty() {
+                    value
+                } else {
+                    tr(&value).into_owned()
+                };
                 let vink = match level {
                     "good" => style::healthy(),
                     "warn" => style::warning(),
@@ -519,6 +501,9 @@ fn list(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, h: &mut 
                 ui.set_opacity(1.0);
                 if resp.clicked() && locate.is_none() && delete.is_none() {
                     select = Some(e.id.clone());
+                    if resp.double_clicked() {
+                        open = Some(e.id.clone());
+                    }
                 }
             }
             ui.allocate_space(Vec2::new(w, total));
@@ -530,6 +515,9 @@ fn list(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, h: &mut 
         p.remove(&id, h);
     } else if let Some(id) = select {
         p.select(Some(id), h);
+    }
+    if let Some(id) = open {
+        p.open_file(&id, h);
     }
     y + shown
 }
@@ -660,6 +648,9 @@ fn detail(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, e: Ent
                 style::text_1(),
             );
         }
+    } else if e.is_file() {
+        point_row(p, ui, &mut g, &e, 'a', "Position", h);
+        file_rows(p, ui, &mut g, &e, h);
     } else {
         point_row(p, ui, &mut g, &e, 'a', "Position", h);
         let label = if e.is_tree() {
@@ -791,6 +782,37 @@ fn detail(p: &mut MapEntities, ui: &mut egui::Ui, x: f32, y: f32, w: f32, e: Ent
         }
     }
     y
+}
+
+/// The path of a file entity: typed, pasted or chosen, and the button that shows it.
+fn file_rows(p: &mut MapEntities, ui: &mut egui::Ui, g: &mut Grid, e: &Entity, h: &mut Host) {
+    let id = e.id.clone();
+    let r = g.place(true, 11.0 + 3.0 + CONTROL);
+    let cr = caption(ui, r.left(), r.top(), r.width(), "Picture or video", CONTROL);
+    let typed = Rect::from_min_size(cr.min, Vec2::new(cr.width() - 34.0, CONTROL));
+    if let Some(t) = text_box(ui, typed, &e.path, true, (id.clone(), "path".to_string())) {
+        let path = clean_path(&t);
+        p.update(&id, h, |e| e.path = path);
+    }
+    if small_btn(
+        ui,
+        Rect::from_min_size(Pos2::new(cr.right() - 28.0, cr.top()), Vec2::splat(28.0)),
+        "folder-open",
+        "Choose a picture or video",
+        false,
+        (id.clone(), "choose".to_string()),
+    ) {
+        p.choose_file(&id, h);
+    }
+    let r = g.place(true, CONTROL);
+    let open = Button::new("Open the file", Variant::Secondary)
+        .icon("file-image")
+        .small()
+        .enabled(!e.path.is_empty())
+        .title("Show it in a card over the window. A double click on the map does the same.");
+    if open.show(ui, r, (id.clone(), "open".to_string())) {
+        p.open_file(&id, h);
+    }
 }
 
 fn small_btn(
